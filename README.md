@@ -1,7 +1,8 @@
 # How to deploy to the AWS EC2 server
 
-Description.
-This guide will help you gain knowledge on how to automate the running of tests, then send a notification about the result of testing using slack/telegram bot, and deploy an application to the server after each push or pull request.
+**Description**.
+
+> This guide will help you gain knowledge on how to automate the running of tests, then send a notification about the result of testing using slack/telegram bot, and deploy an application to the server after each push or pull request.
 - [How to deploy to the AWS EC2 server](#how-to-deploy-to-the-aws-ec2-server)
   - [create the AWS EC2 server](#create-the-aws-ec2-server)
     - [setting (video tutorial)](#setting-video-tutorial)
@@ -24,6 +25,9 @@ This guide will help you gain knowledge on how to automate the running of tests,
     - [add new credentials to GitHub Secret](#add-new-credentials-to-github-secret)
     - [Update your workflow file.](#update-your-workflow-file)
     - [Create Deploy Script](#create-deploy-script)
+  - [Notification using Slack Bot (Optional)](#notification-using-slack-bot-optional)
+    - [creating Slack app](#creating-slack-app)
+    - [Getting the status of the previous job.](#getting-the-status-of-the-previous-job)
 
 ## create the AWS EC2 server 
 ### setting (video tutorial)
@@ -583,4 +587,71 @@ aws ecr get-login-password --region us-east-1 | docker login --username AWS --pa
 
 docker run -d -p 8080:3000 ${IMAGE_URI}
 echo "deployment finished"
+```
+
+## Notification using Slack Bot (Optional)
+### creating Slack app
+Go to `https://api.slack.com/bot-users` and create an new app.
+![main page](docs/slack_app.png)
+![create app](docs/slack_create_app.png)
+![from scratch](docs/slack_app_from_scretch.png)
+![webhook](docs/slack_app_webhook.png)
+![webhook setting](docs/slack_webhook_setting.png)
+To get an URL, we need to add a workspace. 
+![select workspace](docs/slack_app_workspace.png)
+After selecting, you can use generated the URL
+![after selecting the workspace](docs/slack_app_after_select_workspace.png)
+
+now need to add it to the secret of GitHub.
+
+![store to secret](docs/slack_webhook_add_to_secret.png)
+
+Perfect!
+### Getting the status of the previous job.
+To pass the exit status from the previous job to the next job, we use this trick: we write the status in the status.txt artifact.
+```yml
+      ... ...
+      # add to at end of Deploy job.
+      - name: Create file status.txt and write the job status into it
+        if: always()
+        run: |
+          echo ${{ job.status }} > status.txt
+      - name: Upload file status.txt as an artifact
+        if: always()
+        uses: actions/upload-artifact@v1
+        with:
+          name: pass_status_to_notification
+          path: status.txt
+```
+
+Keyword `needs` uses to create a pipeline. This job will run only after the `Deploy` job.
+```yml
+notification:
+    needs: ['Deploy']
+    if: ${{always()}}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v2
+      - name: Download artifact pass_status_to_notification
+        uses: actions/download-artifact@v1
+        with:
+          name: pass_status_to_notification
+      - name: Set the status of previous job as output parameters
+        id: set_output
+        run: echo "::set-output name=job_status::$(<pass_status_to_notification/status.txt)"
+      - name: failing notification
+        if: ${{ steps.set_output.outputs.job_status == 'failure' }}
+        run: |
+          bash notify.sh ${{secrets.SLACK_WEBHOOK_TOKEN}} "$Failed_Message" "$Failed_Emoji"
+        env:
+          Failed_Message: 'the deploy failed'
+          Failed_Emoji: ':pensive:'
+      - name: success notification
+        if: ${{ steps.set_output.outputs.job_status == 'success' }}
+        run: |
+          bash notify.sh ${{secrets.SLACK_WEBHOOK_TOKEN}} "$Success_Message" "$Success_Emoji"
+        env:
+          Success_Message: 'success deployment'
+          Success_Emoji: ':rocket:'
 ```

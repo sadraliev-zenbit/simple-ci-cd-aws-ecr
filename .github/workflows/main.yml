@@ -17,6 +17,9 @@ on:
   push:
     branches:
       - 'main'
+  pull_request:
+    branches:
+      - 'develop'
 
 jobs:
   deploy:
@@ -66,3 +69,43 @@ jobs:
           envs: IMAGE_TAG
           script: |
             bash /home/ubuntu/deploy.sh ${IMAGE_TAG}
+      # To pass the exit status to the next job, we use this trick: we write the status in the status.txt artifact.
+      - name: Create file status.txt and write the job status into it
+        if: always()
+        run: |
+          echo ${{ job.status }} > status.txt
+      - name: Upload file status.txt as an artifact
+        if: always()
+        uses: actions/upload-artifact@v1
+        with:
+          name: pass_status_to_notification
+          path: status.txt
+
+  notification:
+    needs: ['Deploy']
+    if: ${{always()}}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v2
+      - name: Download artifact pass_status_to_notification
+        uses: actions/download-artifact@v1
+        with:
+          name: pass_status_to_notification
+      - name: Set the status of previous job as output parameters
+        id: set_output
+        run: echo "::set-output name=job_status::$(<pass_status_to_notification/status.txt)"
+      - name: failing notification
+        if: ${{ steps.set_output.outputs.job_status == 'failure' }}
+        run: |
+          bash notify.sh ${{secrets.SLACK_WEBHOOK_TOKEN}} "$Failed_Message" "$Failed_Emoji"
+        env:
+          Failed_Message: 'the deploy failed'
+          Failed_Emoji: ':pensive:'
+      - name: success notification
+        if: ${{ steps.set_output.outputs.job_status == 'success' }}
+        run: |
+          bash notify.sh ${{secrets.SLACK_WEBHOOK_TOKEN}} "$Success_Message" "$Success_Emoji"
+        env:
+          Success_Message: 'success deployment'
+          Success_Emoji: ':rocket:'
