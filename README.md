@@ -10,7 +10,12 @@
       - [Creating the User Groups](#creating-the-user-groups)
 - [Create a new Nest.JS project](#create-a-new-nestjs-project)
       - [Generate new project using nest cli](#generate-new-project-using-nest-cli)
+      - [Create Multistage Dockerfile](#create-multistage-dockerfile)
       - [GitHub Action configuration](#github-action-configuration)
+      - [Push to a remote repository](#push-to-a-remote-repository)
+    - [Setting The ECR on the server](#setting-the-ecr-on-the-server)
+      - [Update a secure group (Firewall)](#update-a-secure-group-firewall)
+    - [From manual deployment to automatic deployment.](#from-manual-deployment-to-automatic-deployment)
 
 ## create the AWS EC2 server 
 here will be a link to the video
@@ -283,6 +288,31 @@ simple-ci-cd-aws-ecr/
 └── tsconfig.json
 ```
 
+#### Create Multistage Dockerfile
+To create an image, we need to create a Dockerfile, where will be our application.
+```dockerfile
+# Build Stage 1
+# This build created a staging docker image
+#
+FROM node:10.15.2-alpine AS appbuild
+WORKDIR /usr/src/app
+COPY package.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+# Build Stage 2
+# This build takes the production build from staging build
+#
+FROM node:10.15.2-alpine
+WORKDIR /usr/src/app
+COPY package.json ./
+RUN npm install
+COPY --from=appbuild /usr/src/app/dist ./dist
+EXPOSE 3000
+CMD ["node", "dist/main"]
+```
+
 #### GitHub Action configuration
 1. create trigger
 An event is a specific activity in a repository that triggers a workflow run. In our case, activity can originate from GitHub when someone pushes a commit to a repository. 
@@ -291,7 +321,7 @@ An event is a specific activity in a repository that triggers a workflow run. In
 on:
   push:
     branches:
-      - 'main'
+      - 'main' 
 ```
 2. store credentials to the GitHub secret.
 Go to the `setting` section of your repository, and create a new secret.
@@ -339,11 +369,161 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
         run: |
           # Build a docker container and
           # push it to ECR so that it can
           # be deployed to ECS.
+
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+```
+#### Push to a remote repository
+Great! Now, we can push our code to the repository.
+Every time, when we push/pull requests the GitHub Actions will run jobs as described in main.yml.
+![push](docs/github_actions.png)
+
+In 6 step, we build and push a new image to the ECR. 
+Let's check out the ECR repository. 
+You should see something like this: 
+![new a image](docs/ecr_new_image.png)
+
+### Setting The ECR on the server
+To pull the image just created from the ECR to the EC2 server, we need to configure our  `aws cli` as shown below, please write `aws configure` in your a terminal of server:
+```bash
+$ aws configure
+#Output
+AWS Access Key ID [None]: <your access key>
+AWS Secret Access Key [None]: <your secret key>
+Default region name [None]: us-east-1
+Default output format [None]: json
+```
+Next, enter the following command, I copied it from the ECR repository
+```bash
+$ aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 597884108175.dkr.ecr.us-east-1.amazonaws.com
+# Output
+WARNING! Your password will be stored unencrypted in /home/ubuntu/.docker/config.json.
+Configure a credential helper to remove this warning. See
+https://docs.docker.com/engine/reference/commandline/login/#credentials-store
+
+Login Succeeded
+```
+![all commands](docs/ecr_view_commands.png)
+![login commands](docs/ecr_login_command.png)
+
+Now, copy URI from created image and run your container.
+`docker run -p 8080:3000 ${IMAGE_URI}`
+![image uri](docs/ecr_image_uri.png)
+```bash
+$ docker run -p 8080:3000 597884108175.dkr.ecr.us-east-1.amazonaws.com/simple-ci-cd-aws-ecr:8f9e94e6f4b19180142b48bff6045a28bd990eb6
+#Output
+Unable to find image '597884108175.dkr.ecr.us-east-1.amazonaws.com/simple-ci-cd-aws-ecr:8f9e94e6f4b19180142b48bff6045a28bd990eb6' locally
+8f9e94e6f4b19180142b48bff6045a28bd990eb6: Pulling from simple-ci-cd-aws-ecr
+169185f82c45: Pull complete
+53e52a67e355: Pull complete
+fc2cb9a5e98e: Pull complete
+056eb93f952d: Pull complete
+1c92e5341865: Pull complete
+e5cfcf777036: Pull complete
+a6f80ea41547: Pull complete
+Digest: sha256:23c991e8c25081e31b9170216df8d942179f623158a2eae57cb97909b3718c0f
+Status: Downloaded newer image for 597884108175.dkr.ecr.us-east-1.amazonaws.com/simple-ci-cd-aws-ecr:8f9e94e6f4b19180142b48bff6045a28bd990eb6
+```
+Before checking it, we need to add port `8080` to the security group`.
+
+#### Update a secure group (Firewall)
+Go to the AWS Console and select your EC2 instance.
+![select instance](docs/ec2-secure.png)
+![select security section](docs/ec2-choose-secure.png)
+![select security](docs/ec2-select-group.png)
+![select inbound rules](docs/ec2-inbound.png)
+![set port ](docs/ec2-set-8080-port.png)
+After setting, reboot your server.
+![reboot](docs/ec2-reboot.png)
+
+Go to your website `http://ip.address:8080/`. Note! It must be the HTTP protocol! 
+
+![hello world](docs/running_container.png)
+
+### From manual deployment to automatic deployment.
+Now, we will automate the pulling down, stopping the old container and starting the new one.
+
+To do this, update your workflow file. 
+```yml
+- name: Deploy to EC2 via ssh
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        uses: appleboy/ssh-action@v0.1.4
+        with:
+          host: ec2-54-173-228-252.compute-1.amazonaws.com
+          username: ubuntu
+          port: 22
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          envs: IMAGE_TAG
+          script: |
+            bash /home/ubuntu/deploy_scripts/deploy.sh ${IMAGE_TAG}
+```
+then add a new secret `SSH_PRIVATE_KEY` with a value of .pem/.cer file to your repository.
+To get the value of your key use the command:
+```bash
+$ cat aws-linux-ecr.cer
+#Output
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEAngeAQwRC0rjgvR//Q2FiMdkIHnFxnwarl/Ibn2lIhvj7qV/m
+0YQdXirn3FDNCld5DlIE9P/4zZGBbHNqK93hcmmIAauLp+ekjYPta6gXYBnXErMC
+blh5tilZLoISa7PumnNWM1jBykDIXhk7AmQj87JLc6ml7Pjyo0REOSDm+mEAvdK4
+/mrI723Go8dWXAqCD8DsyxWCCKqaVql1xWnkEo7qucmbqWcws6KznK30pRjfSj2o
+FaQ9Dnhqp8kdQi88dasdcGssvgYmRUPIQZcQDck+X0wcsfo2roz0RXne4ydZrss0
+6Mh4jGbq4Lg5VZ0WKvZdUHxMb8L2ZtFeRUNrnQIDAQABAoIBAQCB6ASmErCj7NrC
+XbVHPJyuAY1NCVCvu5n/dEUEzFWUrsSiPXXPMd26dWbYk4uaPsIC5aWxiWKMClrs
+Pgw/invalidkeyInvalidKeYInvaltOYSZNsBks3VdI8Cyz9YJJ6YOmxl/rmOk78
+G52In612PVENKZ5+qT88u3ehxsxZcW2Xhf9zFfVmitGQD3xKAKZkRXRNHZ5EcF5b
+dpuyuwn5qZtgRbh7pWR8yveZLx5FgZhY3SmmQWfhFdN02eM4qTDMnefReUaO2il5
+0UntO/pgGel0RWaEq8kjdP28c140p2lYn7GvQ6/7eLKBymv+ySnVqkSHsrVclsNO
+4bams265AoGBAM2rad6ZWq6DfpfB/IhIKHLXe0XjG4ATf0AppSbansIOzNTn7BD
+g7AGIbqIYm72HoVDKoGAh6M5iiFsfZUlC2J/UVAbZapASzToeQ2za4R/EoS92pfI
+3Hy6Ce2+cVzM6q+b1bzEjuCUFaI5v5jfIwZqszNFWcFTKxRoxyWp3WkjAoGBAMSz
+lJu38dOAD/npEgPAXnSdZhDX29uoHX89G2mXmZDWnC+02Uvh05LqFSvPH73PI5HZ
+lUgm8yeiLFU2Z14YdliB6wJWxkWyFRypRhGC5jLlwaMuoC2qrPdmXXE/Jt6E8mcc
+crT/lPSzf5ETyJ2HqdVduluw1bX3jpRF67UEdgQ/AoGADf8YFGMw+65lvSAyfjva
+6KfaYIQ1vlau+ATPUVWyTWUmAjwypeAyWgxQx0z4xexh71e+0MlacbU8vUGQ2lGH
+ENDxS65RoOB3PcaEVnZbXsz3CamR8rpspuBSRKetN0+KuSC1zv7hak8pmbysWU72
+Jz2jrF2P2iQ6zkzDIMEKnFkCgYEAr5VyEXKoflhxam7/srOUXVpnUp+tVS2DbyIY
+BzDZVu4Lq5Yu5kqmdx1XWqzgM6nkoXvtguOp5/Yexs3yhY8mjSkjpAnboTkvGU+N
+CXKklEh9inHDcCBLl+gbf0yVIMriKuK9Dg6bY7ebJuDXEq+YDatGADUg//cEohys
+JADgbDcCgYBAiENcjLWm4jHACclAK84XbfJCtbuzSdxpWsvA9L19wEczQ812/sLs
+NO4XAe0CtIQajqfCla90z29u6AP+pDYNhPTzqPBNnOXXNqVK0LLL//jSCtKQ5cpO
+FhJUwcWLZzRO5jsV2BFQOJ/myohuinX4RQDNdqk90xKNrLbW1eUs1Q==
+-----END RSA PRIVATE KEY-----%
+```
+After, you should create a new shell script for deploying in your server `/home/ubuntu/deploy.sh`
+
+```bash
+#!/bin/env bash
+CONTAINERS=`docker ps -a | awk 'NR>1 {print $1}'`
+
+# Stops all containers
+if [ ! -z "$CONTAINERS" ]; then
+    # This policy will never automatically start a container. This 	   is the default policy for all containers created with `docker run`.
+	docker update --restart=no ${CONTAINERS}
+	docker stop ${CONTAINERS}
+fi
+# Clean up
+docker system prune -f -a
+
+IMAGE_ID=$1
+ECR_URL="597884108175.dkr.ecr.us-east-1.amazonaws.com"
+ECR_REPOSITORY_NAME="simple-ci-cd-aws-ecr"
+
+IMAGE_URI="${ECR_URL}/${ECR_REPOSITORY_NAME}:${IMAGE_ID}"
+echo "$1" > ${img_tag_file}
+
+echo "$(date): starting server"
+echo "connection to the AWS ECR"
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 597884108175.dkr.ecr.us-east-1.amazonaws.com
+
+docker run -d -p 8080:3000 ${IMAGE_URI}
+echo "deployment finished"
 ```
