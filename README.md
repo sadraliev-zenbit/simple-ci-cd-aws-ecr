@@ -1,4 +1,7 @@
 # How to deploy to the AWS EC2 server
+
+Description.
+This guide will help you gain knowledge on how to automate the running of tests, then send a notification about the result of testing using slack/telegram bot, and deploy an application to the server after each push or pull request.
 - [How to deploy to the AWS EC2 server](#how-to-deploy-to-the-aws-ec2-server)
   - [create the AWS EC2 server](#create-the-aws-ec2-server)
     - [setting (video tutorial)](#setting-video-tutorial)
@@ -535,7 +538,6 @@ N2ZZOYKXyYPFUATBGfTFp0xGrgb3yIa1DAr8zWbCizrJGac0fDcYXcK1KCZnB2DrgDzJvd
 paId9DOPl1jZAAAAF3VidW50dUBpcC0xNzItMzEtODctMjQxAQID
 -----END OPENSSH PRIVATE KEY-----
 ```
-
 ### Update your workflow file. 
 ```yml
 - name: Deploy to EC2 via ssh
@@ -550,7 +552,7 @@ paId9DOPl1jZAAAAF3VidW50dUBpcC0xNzItMzEtODctMjQxAQID
           script_stop: true
           envs: IMAGE_TAG
           script: |
-            bash /home/ubuntu/deploy_scripts/deploy.sh ${IMAGE_TAG}
+            bash /home/ubuntu/deploy.sh ${IMAGE_TAG}
 ```
 ### Create Deploy Script
 After, you should create a new shell script for deploying in your server `/home/ubuntu/deploy.sh`
