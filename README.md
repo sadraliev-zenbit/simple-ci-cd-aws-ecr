@@ -1,6 +1,7 @@
 # How to deploy to the AWS EC2 server
 - [How to deploy to the AWS EC2 server](#how-to-deploy-to-the-aws-ec2-server)
   - [create the AWS EC2 server](#create-the-aws-ec2-server)
+    - [setting (video tutorial)](#setting-video-tutorial)
     - [install Docker](#install-docker)
       - [Executing the Docker Command Without Sudo (Optional)](#executing-the-docker-command-without-sudo-optional)
       - [Running NGINX Open Source in a Docker Container](#running-nginx-open-source-in-a-docker-container)
@@ -8,16 +9,21 @@
     - [Create the ECR repository](#create-the-ecr-repository)
       - [Create the IAM user credentials](#create-the-iam-user-credentials)
       - [Creating the User Groups](#creating-the-user-groups)
-- [Create a new Nest.JS project](#create-a-new-nestjs-project)
-      - [Generate new project using nest cli](#generate-new-project-using-nest-cli)
-      - [Create Multistage Dockerfile](#create-multistage-dockerfile)
-      - [GitHub Action configuration](#github-action-configuration)
-      - [Push to a remote repository](#push-to-a-remote-repository)
-    - [Setting The ECR on the server](#setting-the-ecr-on-the-server)
-      - [Update a secure group (Firewall)](#update-a-secure-group-firewall)
-    - [From manual deployment to automatic deployment.](#from-manual-deployment-to-automatic-deployment)
+  - [Create a new Nest.JS project](#create-a-new-nestjs-project)
+    - [Generate new project using nest cli](#generate-new-project-using-nest-cli)
+    - [Create Multistage Dockerfile](#create-multistage-dockerfile)
+  - [GitHub Action configuration](#github-action-configuration)
+    - [Push to a remote repository](#push-to-a-remote-repository)
+  - [Setting The ECR on the server](#setting-the-ecr-on-the-server)
+  - [Update a secure group (Firewall)](#update-a-secure-group-firewall)
+  - [From manual deployment to automatic deployment.](#from-manual-deployment-to-automatic-deployment)
+    - [Creating new credentials for GitHub](#creating-new-credentials-for-github)
+    - [add new credentials to GitHub Secret](#add-new-credentials-to-github-secret)
+    - [Update your workflow file.](#update-your-workflow-file)
+    - [Create Deploy Script](#create-deploy-script)
 
 ## create the AWS EC2 server 
+### setting (video tutorial)
 here will be a link to the video
 https://prnt.sc/b1hmlOzOFP1S
 
@@ -245,9 +251,9 @@ Provide a User group name (ECR-FULL-ACCESS), select user and select policy on th
 
 After creating the user group.
 ![](docs/aim_after_creating_ecr_group.png)
-# Create a new Nest.JS project
+## Create a new Nest.JS project
 
-#### Generate new project using nest cli
+### Generate new project using nest cli
 before you need to install a global package nest and create a new project.
 ```
 npm i -g @nestjs/cli
@@ -288,7 +294,7 @@ simple-ci-cd-aws-ecr/
 └── tsconfig.json
 ```
 
-#### Create Multistage Dockerfile
+### Create Multistage Dockerfile
 To create an image, we need to create a Dockerfile, where will be our application.
 ```dockerfile
 # Build Stage 1
@@ -313,7 +319,7 @@ EXPOSE 3000
 CMD ["node", "dist/main"]
 ```
 
-#### GitHub Action configuration
+## GitHub Action configuration
 1. create trigger
 An event is a specific activity in a repository that triggers a workflow run. In our case, activity can originate from GitHub when someone pushes a commit to a repository. 
 
@@ -379,7 +385,7 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 ```
-#### Push to a remote repository
+### Push to a remote repository
 Great! Now, we can push our code to the repository.
 Every time, when we push/pull requests the GitHub Actions will run jobs as described in main.yml.
 ![push](docs/github_actions.png)
@@ -389,7 +395,7 @@ Let's check out the ECR repository.
 You should see something like this: 
 ![new a image](docs/ecr_new_image.png)
 
-### Setting The ECR on the server
+## Setting The ECR on the server
 To pull the image just created from the ECR to the EC2 server, we need to configure our  `aws cli` as shown below, please write `aws configure` in your a terminal of server:
 ```bash
 $ aws configure
@@ -432,7 +438,7 @@ Status: Downloaded newer image for 597884108175.dkr.ecr.us-east-1.amazonaws.com/
 ```
 Before checking it, we need to add port `8080` to the security group`.
 
-#### Update a secure group (Firewall)
+## Update a secure group (Firewall)
 Go to the AWS Console and select your EC2 instance.
 ![select instance](docs/ec2-secure.png)
 ![select security section](docs/ec2-choose-secure.png)
@@ -446,10 +452,91 @@ Go to your website `http://ip.address:8080/`. Note! It must be the HTTP protocol
 
 ![hello world](docs/running_container.png)
 
-### From manual deployment to automatic deployment.
+## From manual deployment to automatic deployment.
 Now, we will automate the pulling down, stopping the old container and starting the new one.
 
-To do this, update your workflow file. 
+### Creating new credentials for GitHub
+
+Generate new ssh key for new user.
+`ssh-keygen -t rsa -b 4096 -f ~/.ssh/github`
+
+Set the permissions to only allow this user into it
+`chmod 700 ~/.ssh`
+
+Set the permissions to only allow this user to access it
+`chmod 600 ~/.ssh/authorized_keys`
+
+update `vi /etc/ssh/sshd_config`. Inside, you need to update two settings:
+```vim
+PubkeyAuthentication yes
+PubkeyAcceptedKeyTypes=+ssh-rsa
+```
+
+We need to add the public key (github.pub) to authorized_keys so machines using the private key (github) can access the server.
+
+The easiest way is to use a cat command to append github-actions.pub into authorized_keys. It looks like this:
+` cat github.pub >> ~/.ssh/authorized_keys`
+
+Note: Make sure you use double-right-angled brackets (>>) and not single-angled brackets (>). Double means append, while single means overwrite. Be careful!
+
+### add new credentials to GitHub Secret
+then add a new secret `SSH_PRIVATE_KEY` with a value of the private key file to your repository.
+To get the value of your key use the command:
+```bash
+$ cat ~/.ssh/github
+# Output
+-----BEGIN OPENSSH PRIVATE KEY-----
+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
+-----END OPENSSH PRIVATE KEY-----
+```
+
+### Update your workflow file. 
 ```yml
 - name: Deploy to EC2 via ssh
         env:
@@ -465,39 +552,7 @@ To do this, update your workflow file.
           script: |
             bash /home/ubuntu/deploy_scripts/deploy.sh ${IMAGE_TAG}
 ```
-then add a new secret `SSH_PRIVATE_KEY` with a value of .pem/.cer file to your repository.
-To get the value of your key use the command:
-```bash
-$ cat aws-linux-ecr.cer
-#Output
------BEGIN RSA PRIVATE KEY-----
-MIIEpAIBAAKCAQEAngeAQwRC0rjgvR//Q2FiMdkIHnFxnwarl/Ibn2lIhvj7qV/m
-0YQdXirn3FDNCld5DlIE9P/4zZGBbHNqK93hcmmIAauLp+ekjYPta6gXYBnXErMC
-blh5tilZLoISa7PumnNWM1jBykDIXhk7AmQj87JLc6ml7Pjyo0REOSDm+mEAvdK4
-/mrI723Go8dWXAqCD8DsyxWCCKqaVql1xWnkEo7qucmbqWcws6KznK30pRjfSj2o
-FaQ9Dnhqp8kdQi88dasdcGssvgYmRUPIQZcQDck+X0wcsfo2roz0RXne4ydZrss0
-6Mh4jGbq4Lg5VZ0WKvZdUHxMb8L2ZtFeRUNrnQIDAQABAoIBAQCB6ASmErCj7NrC
-XbVHPJyuAY1NCVCvu5n/dEUEzFWUrsSiPXXPMd26dWbYk4uaPsIC5aWxiWKMClrs
-Pgw/invalidkeyInvalidKeYInvaltOYSZNsBks3VdI8Cyz9YJJ6YOmxl/rmOk78
-G52In612PVENKZ5+qT88u3ehxsxZcW2Xhf9zFfVmitGQD3xKAKZkRXRNHZ5EcF5b
-dpuyuwn5qZtgRbh7pWR8yveZLx5FgZhY3SmmQWfhFdN02eM4qTDMnefReUaO2il5
-0UntO/pgGel0RWaEq8kjdP28c140p2lYn7GvQ6/7eLKBymv+ySnVqkSHsrVclsNO
-4bams265AoGBAM2rad6ZWq6DfpfB/IhIKHLXe0XjG4ATf0AppSbansIOzNTn7BD
-g7AGIbqIYm72HoVDKoGAh6M5iiFsfZUlC2J/UVAbZapASzToeQ2za4R/EoS92pfI
-3Hy6Ce2+cVzM6q+b1bzEjuCUFaI5v5jfIwZqszNFWcFTKxRoxyWp3WkjAoGBAMSz
-lJu38dOAD/npEgPAXnSdZhDX29uoHX89G2mXmZDWnC+02Uvh05LqFSvPH73PI5HZ
-lUgm8yeiLFU2Z14YdliB6wJWxkWyFRypRhGC5jLlwaMuoC2qrPdmXXE/Jt6E8mcc
-crT/lPSzf5ETyJ2HqdVduluw1bX3jpRF67UEdgQ/AoGADf8YFGMw+65lvSAyfjva
-6KfaYIQ1vlau+ATPUVWyTWUmAjwypeAyWgxQx0z4xexh71e+0MlacbU8vUGQ2lGH
-ENDxS65RoOB3PcaEVnZbXsz3CamR8rpspuBSRKetN0+KuSC1zv7hak8pmbysWU72
-Jz2jrF2P2iQ6zkzDIMEKnFkCgYEAr5VyEXKoflhxam7/srOUXVpnUp+tVS2DbyIY
-BzDZVu4Lq5Yu5kqmdx1XWqzgM6nkoXvtguOp5/Yexs3yhY8mjSkjpAnboTkvGU+N
-CXKklEh9inHDcCBLl+gbf0yVIMriKuK9Dg6bY7ebJuDXEq+YDatGADUg//cEohys
-JADgbDcCgYBAiENcjLWm4jHACclAK84XbfJCtbuzSdxpWsvA9L19wEczQ812/sLs
-NO4XAe0CtIQajqfCla90z29u6AP+pDYNhPTzqPBNnOXXNqVK0LLL//jSCtKQ5cpO
-FhJUwcWLZzRO5jsV2BFQOJ/myohuinX4RQDNdqk90xKNrLbW1eUs1Q==
------END RSA PRIVATE KEY-----%
-```
+### Create Deploy Script
 After, you should create a new shell script for deploying in your server `/home/ubuntu/deploy.sh`
 
 ```bash
